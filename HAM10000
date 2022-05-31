@@ -1,0 +1,112 @@
+import numpy as np
+import pandas as pd
+import cv2
+import os
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+import shutil
+######
+from google.colab import drive
+drive.mount('/content/drive')
+######
+def image_preprocessing(img_path, img_size):
+    img = cv2.imread(img_path)
+    h, w, _ = img.shape
+    lmax = max(h, w)
+    
+    if h!=w and lmax==h:
+        err = h-w
+        img = np.concatenate([np.zeros((h, err//2, 3), dtype="uint8"), img, np.zeros((h, err-err//2, 3))], 1)
+    elif h!=w and lmax==w:
+        err = w-h
+        img = np.concatenate([np.zeros((err//2, w, 3), dtype="uint8"), img, np.zeros((err-err//2, w, 3))], 0)
+    return img
+######
+def data_open_save(data_path, new_path, img_size=(224, 224), data_split=True, data_split_rate=[0.7, 0.15, 0.15]):
+    #先建立兩個list儲存資料路徑跟對應的label
+    data_path_list, data_label_list = [], []
+    
+    for root, dirs, files in os.walk(data_path):
+        if len(files)!=0:
+            label = root.split("/")[-1]
+            if data_split:
+                split_names = ["train", "valid", "test"]            
+                for each_name in split_names:
+                    new_root = os.path.join(new_path, each_name, label)
+                    if not os.path.exists(new_root):
+                        os.makedirs(new_root)
+            else:
+                new_root = os.path.join(new_path, label)
+                if not os.path.exists(new_root):
+                    os.makedirs(new_root)
+        
+        for file in files:
+            img_path = os.path.join(root, file)
+            label = root.split("/")[-1]
+            data_path_list.append(img_path)
+            data_label_list.append(label)
+
+    data_list = pd.DataFrame({"img_path":data_path_list, "label":data_label_list})
+    class_map = { label: i for i, label in enumerate(data_list["label"].unique().copy())}
+    data_list["label_class"] = data_list["label"].map(class_map)
+
+    if data_split:
+        train_list, test_list = train_test_split(data_list,
+                            test_size=sum(data_split_rate[-2:]),
+                            random_state=2,
+                            stratify=data_list["label_class"])
+        valid_list, test_list = train_test_split(test_list,
+                            test_size=data_split_rate[-1]/sum(data_split_rate[-2:]),
+                            random_state=2,
+                            stratify=test_list["label_class"])
+  
+        data_types = [train_list["img_path"].values, valid_list["img_path"].values, test_list["img_path"].values]
+        split_names = ["train", "valid", "test"]
+    else:
+        data_types = [data_path_list]
+        split_names = [""]
+
+    for each_list, each_name in zip(data_types, split_names):
+        for img_path in each_list:
+            label, file = img_path.split("/")[-2:]
+            new_root = os.path.join(new_path, each_name, label)
+            img_newpath = os.path.join(new_root, file)
+            img = image_preprocessing(img_path, img_size)
+            cv2.imwrite(img_newpath, img)
+######
+df = pd.read_csv('/content/drive/MyDrive/深度學習概論與應用/demo/row_data/HAM10000_original_data/HAM10000_metadata.csv')
+df.head()
+######
+data_path = "/content/drive/MyDrive/深度學習概論與應用/demo/row_data/HAM10000_original_data/HAM10000_images_part_1/"
+os.path.exists(data_path)
+
+for img in os.listdir(data_path):
+  tmp = df[ df.iloc[:,1] == img.split('.')[0] ]
+  class_name = tmp.iloc[0,2]
+
+  src_path = '/content/drive/MyDrive/深度學習概論與應用/demo/row_data/HAM10000_original_data/HAM10000_images_part_1/'+img
+  target_path = '/content/drive/MyDrive/深度學習概論與應用/demo/row_data/HAM10000/{0}/{1}'.format(class_name, img)
+
+  print(src_path, target_path)
+  shutil.move(src_path, target_path)
+######
+data_path = "/content/drive/MyDrive/深度學習概論與應用/demo/row_data/HAM10000_original_data/HAM10000_images_part_2/"
+os.path.exists(data_path)
+
+for img in os.listdir(data_path):
+  tmp = df[ df.iloc[:,1] == img.split('.')[0] ]
+  class_name = tmp.iloc[0,2]
+
+  src_path = '/content/drive/MyDrive/深度學習概論與應用/demo/row_data/HAM10000_original_data/HAM10000_images_part_2/'+img
+  target_path = '/content/drive/MyDrive/深度學習概論與應用/demo/row_data/HAM10000/{0}/{1}'.format(class_name, img)
+
+  print(src_path, target_path)
+  shutil.move(src_path, target_path)
+######
+data_path = '/content/drive/MyDrive/深度學習概論與應用/demo/row_data/HAM10000'
+os.path.exists(data_path)
+
+new_path = '/content/drive/MyDrive/深度學習概論與應用/demo/dataset/HAM10000'
+img_size=(224, 224)
+
+data_open_save(data_path, new_path, img_size=(224, 224), data_split=True, data_split_rate=[0.6, 0.2, 0.2])
