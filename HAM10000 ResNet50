@@ -1,0 +1,203 @@
+import tensorflow as tf
+#####
+from google.colab import drive
+drive.mount('/content/drive')
+#####
+tf.test.is_gpu_available()
+#####
+import os
+import pandas as pd
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+#####
+data_path = "/content/drive/MyDrive/深度學習概論與應用/demo/dataset/HAM10000/"
+os.path.exists(data_path)
+#####
+def DataList(data_path):
+  img_list, data_label, data_types = [], [], []
+  class_path = ""
+  for root, dirs, files in os.walk(data_path):
+    if root.split("/")[-1]!="model-logs":
+      for file in files:
+        if file.find("checkpoint")==-1:
+          if file[-3:]=="csv":
+            class_path = os.path.join(root, file)
+          else:
+            img_list.append(os.path.join(root, file))
+            label = root.split("/")[-1]
+            types = root.split("/")[-2]
+            data_label.append(label)
+            data_types.append(types)
+
+  data_list = pd.DataFrame({"img_path":img_list, "label_name":data_label, "types":data_types})
+  
+  if class_path != "":
+    class_map = pd.read_csv(class_path, header=None)
+    class_map = dict(class_map.values)
+  else:
+    class_map = data_list[data_list["types"]=="train"]["label_name"].unique()
+    class_map = {label: str(i) for i, label in enumerate(class_map)}
+    print(class_map)
+
+  data_list["label"] = data_list["label_name"].map(class_map)
+  
+  train_list = data_list[data_list["types"]=="train"][["img_path", "label_name", "label"]].copy()
+  valid_list = data_list[data_list["types"]=="valid"][["img_path", "label_name", "label"]].copy()
+  test_list = data_list[data_list["types"]=="test"][["img_path", "label_name", "label"]].copy()
+
+  return train_list, valid_list, test_list, class_map
+#####
+train_list, valid_list, test_list, class_map = DataList(data_path)
+train_list.head()
+#####
+from tensorflow import keras
+from tensorflow.keras import layers
+from tensorflow.keras import callbacks
+from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input
+#####
+num_classes = train_list["label"].unique().shape[0]
+num_classes
+#####
+img_shape = (224, 224)
+batch_size = 16
+#####
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+#####
+train_datagen = ImageDataGenerator(
+                    rotation_range=5,
+                    horizontal_flip=True,
+                    vertical_flip=False,
+                    width_shift_range=0.1,
+                    height_shift_range=0.1,
+                    preprocessing_function=preprocess_input
+                    
+                    )
+valid_datagen = ImageDataGenerator(preprocessing_function=preprocess_input)
+test_datagen = ImageDataGenerator(preprocessing_function=preprocess_input)
+#####
+train_generator = train_datagen.flow_from_dataframe(
+                              dataframe=train_list,
+                              directory="",
+                              x_col="img_path",
+                              y_col="label",
+                              target_size=img_shape,
+                              batch_size=batch_size,
+                              class_mode='categorical')
+valid_generator = valid_datagen.flow_from_dataframe(
+                              dataframe=valid_list,
+                              directory="",
+                              x_col="img_path",
+                              y_col="label",
+                              target_size=img_shape,
+                              batch_size=batch_size,
+                              class_mode='categorical',
+                              shuffle=False)
+test_generator = test_datagen.flow_from_dataframe(
+                              dataframe=test_list,
+                              directory="",
+                              x_col="img_path",
+                              y_col="label",
+                              target_size=img_shape,
+                              batch_size=batch_size,
+                              class_mode=None,
+                              shuffle=False)
+
+pre_model = ResNet50(weights='imagenet', input_shape=(img_shape[0], img_shape[1], 3), include_top=False)
+#####
+x = layers.GlobalAveragePooling2D()(pre_model.output)
+x = layers.Dense(64, activation="relu")(x)
+# x = layers.Dense(64, activation="relu")(x)
+
+outputs = layers.Dense(num_classes, activation="softmax")(x)
+#####
+model = keras.models.Model(inputs=pre_model.inputs, outputs=outputs)
+
+model_dir = os.path.join(data_path, 'model-logs')
+if not os.path.exists(model_dir):
+  os.makedirs(model_dir)
+
+
+modelfiles = model_dir + '/{}-best-model.h5'.format('basic_model')
+model_mckp = callbacks.ModelCheckpoint(modelfiles,
+                      monitor='val_accuracy',
+                      save_best_only=True)
+
+earlystop = callbacks.EarlyStopping(monitor='val_loss',
+                    patience=3,
+                    verbose=1)
+
+
+callbacks_list = [model_mckp, earlystop]
+#####
+def num_steps_per_epoch(data_generator, batch_size):
+  if data_generator.n % batch_size==0:
+    return data_generator.n//batch_size
+  else:
+    return data_generator.n//batch_size + 1
+#####
+lr = 1e-4
+batch_size = 16
+num_epochs = 10
+
+train_steps = num_steps_per_epoch(train_generator, batch_size)
+valid_steps = num_steps_per_epoch(valid_generator, batch_size)
+#####
+optimizer = keras.optimizers.Adam(lr)
+model.compile(loss="categorical_crossentropy", optimizer=optimizer, metrics=["accuracy"])
+#####
+model.summary()
+#####
+pre_model.trainable = False
+# model.summary()
+#####
+history = model.fit_generator(train_generator,
+                  steps_per_epoch=train_steps,
+                  epochs=num_epochs,
+                  validation_data=valid_generator,
+                  validation_steps=valid_steps,
+                  callbacks=callbacks_list)
+#####
+pre_model.trainable = True
+for each_layer in pre_model.layers[:-5]:
+    each_layer.trainable = False
+
+lr = 1e-6
+batch_size = 16
+num_epochs = 10
+#####
+history = model.fit_generator(train_generator,
+                  steps_per_epoch=train_steps,
+                  epochs=num_epochs,
+                  validation_data=valid_generator,
+                  validation_steps=valid_steps,
+                  callbacks=callbacks_list)
+#####
+from sklearn.metrics import accuracy_score, confusion_matrix
+#####
+model_path = model_dir + '/{}-last-model.h5'.format('basic_model')
+model.save(model_path)
+
+model_path = model_dir + '/{}-last-model.h5'.format('basic_model')
+model = keras.models.load_model(model_path)
+#####
+from keras.models import model_from_json
+#####
+batch_size = 16
+test_steps = num_steps_per_epoch(test_generator, batch_size)
+#####
+y_test = test_list["label"].values.astype(np.int_)
+y_test_predprob = model.predict_generator(test_generator)
+y_test_pred = y_test_predprob.argmax(-1)
+#####
+from sklearn.metrics import accuracy_score, confusion_matrix
+import seaborn as sns
+#####
+print(f"accuracy_score: {accuracy_score(y_test, y_test_pred):.3f}")
+
+plt.figure(figsize=(4, 4))
+sns.heatmap(confusion_matrix(y_test, y_test_pred), 
+      cmap="Blues", annot=True, fmt="d", cbar=False,
+      xticklabels=class_map.keys(), yticklabels=class_map.keys())
+plt.title("Confusion Matrix")
+plt.show()
